@@ -1,55 +1,93 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { getSupabaseBrowserClient } from '../../lib/supabaseClient';
-import { PACKS } from '../../lib/packs';
+import { FALLBACK_CATALOG, FALLBACK_PACKS_INFO } from '../../lib/fallbackCatalog';
 
-const ICONS = {
-  star: `<svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.7 7-6.3-3.9L5.7 21l1.7-7L2 9.2l7.1-.6z" fill="#D3A029"/></svg>`,
-  heart: `<svg viewBox="0 0 24 24"><path d="M12 21s-7.5-4.8-10-9.3C0.4 7.9 2.6 4 6.4 4c2 0 3.6 1.1 4.6 2.7C12 5.1 13.6 4 15.6 4 19.4 4 21.6 7.9 20 11.7 19.5 16.2 12 21 12 21z" fill="#B8502E"/></svg>`,
-  tape: `<svg viewBox="0 0 24 24"><rect x="2" y="9" width="20" height="6" rx="1" fill="#D3A029" opacity="0.85"/></svg>`,
-  leaf: `<svg viewBox="0 0 24 24"><path d="M20 4C10 4 4 10 4 20c10 0 16-6 16-16z" fill="#7C9070"/></svg>`,
-  flower: `<svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="4" fill="#B8502E"/><circle cx="12" cy="18" r="4" fill="#B8502E"/><circle cx="6" cy="12" r="4" fill="#B8502E"/><circle cx="18" cy="12" r="4" fill="#B8502E"/><circle cx="12" cy="12" r="3.4" fill="#D3A029"/></svg>`,
-  pumpkin: `<svg viewBox="0 0 24 24"><ellipse cx="12" cy="14" rx="9" ry="7" fill="#B8502E"/><rect x="11" y="3" width="2" height="5" fill="#7C9070"/></svg>`,
-  camera: `<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2" fill="#5C5644"/><circle cx="12" cy="14" r="4.5" fill="#F5EFE0"/></svg>`,
-};
-const solid = (hex) => `<svg viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="4" fill="${hex}"/></svg>`;
-const pattern = (h1, h2) => `<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="${h1}"/><circle cx="6" cy="6" r="2" fill="${h2}"/><circle cx="18" cy="6" r="2" fill="${h2}"/><circle cx="6" cy="18" r="2" fill="${h2}"/><circle cx="18" cy="18" r="2" fill="${h2}"/><circle cx="12" cy="12" r="2" fill="${h2}"/></svg>`;
+const CATEGORY_KEY = { background: 'backgrounds', sticker: 'stickers', font: 'fonts' };
 
-const CATALOG = {
-  backgrounds: [
-    { id: 'bg-basics', items: [{ id: 'bg1', icon: solid('#F5EFE0') }, { id: 'bg2', icon: solid('#E7DCC0') }, { id: 'bg3', icon: solid('#DCEAE0') }] },
-    { id: 'bg-autumn', items: [{ id: 'bg4', icon: pattern('#E9C98F', '#B8502E') }, { id: 'bg5', icon: pattern('#DDBF8C', '#8A3B21') }] },
-    { id: 'bg-farmhouse', items: [{ id: 'bg7', icon: pattern('#F3ECDD', '#7C9070') }, { id: 'bg8', icon: pattern('#EDE3CC', '#B8502E') }] },
-  ],
-  stickers: [
-    { id: 'st-everyday', items: [{ id: 's1', icon: ICONS.star }, { id: 's2', icon: ICONS.heart }, { id: 's3', icon: ICONS.tape }] },
-    { id: 'st-autumn', items: [{ id: 's4', icon: ICONS.pumpkin }, { id: 's5', icon: ICONS.leaf }] },
-    { id: 'st-travel', items: [{ id: 's6', icon: ICONS.camera }, { id: 's7', icon: ICONS.flower }] },
-  ],
-  fonts: [
-    { id: 'ft-basics', items: [{ id: 'f1', label: 'Hello there' }] },
-    { id: 'ft-script', items: [{ id: 'f2', label: 'Sweet memories' }] },
-  ],
-};
+// Builds the same {backgrounds:[...], stickers:[...], fonts:[...]} shape the
+// UI expects, from the real `packs` + `elements` tables.
+function buildCatalog(packRows, elementRows) {
+  const catalog = { backgrounds: [], stickers: [], fonts: [] };
+  const packsInfo = {};
+  const packIndex = {};
+  packRows.forEach((p) => {
+    const key = CATEGORY_KEY[p.category];
+    if (!key) return;
+    const entry = { id: p.id, subcategory: p.subcategory, items: [] };
+    catalog[key].push(entry);
+    packIndex[p.id] = entry;
+    packsInfo[p.id] = { name: p.name, priceCents: p.price_cents, free: p.is_free };
+  });
+  elementRows.forEach((e) => {
+    const entry = packIndex[e.pack_id];
+    if (!entry) return;
+    if (e.kind === 'font') {
+      entry.items.push({ id: e.id, label: e.font_label || 'Sample text', fontFamily: e.font_family });
+    } else if (e.asset_url) {
+      entry.items.push({ id: e.id, assetUrl: e.asset_url });
+    }
+  });
+  return { catalog, packsInfo };
+}
 
-function findItemPack(itemId) {
-  for (const cat of Object.values(CATALOG)) for (const p of cat) for (const it of p.items) if (it.id === itemId) return p.id;
+function findItemPack(catalog, itemId) {
+  for (const cat of Object.values(catalog)) for (const p of cat) for (const it of p.items) if (it.id === itemId) return p.id;
+}
+function findItem(catalog, itemId) {
+  for (const cat of Object.values(catalog)) for (const p of cat) for (const it of p.items) if (it.id === itemId) return it;
+}
+function isFontItem(catalog, itemId) {
+  return catalog.fonts.some((p) => p.items.some((it) => it.id === itemId));
 }
 
 export default function Editor() {
   const pageRef = useRef(null);
+  const [catalog, setCatalog] = useState({ backgrounds: [], stickers: [], fonts: [] });
+  const [packsInfo, setPacksInfo] = useState({});
   const [activeCat, setActiveCat] = useState('backgrounds');
   const [user, setUser] = useState(null);
   const [ownedPacks, setOwnedPacks] = useState(new Set());
   const [isSubscriber, setIsSubscriber] = useState(false);
   const [creditCount, setCreditCount] = useState(0);
-  const [elements, setElements] = useState([]); // placed elements on the single page
+  const [elements, setElements] = useState([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [toast, setToast] = useState('');
+  const [pageId, setPageId] = useState(null);
+  const [scrapbookId, setScrapbookId] = useState(null);
+  const [pages, setPages] = useState([]);
+  const [saveState, setSaveState] = useState('idle');
   const counterRef = useRef(0);
+  const loadedRef = useRef(false);
 
-  // Load auth + ownership state from Supabase (falls back to guest/demo mode
-  // if Supabase env vars aren't set yet).
+  // Load the real catalog from Supabase (falls back to demo data if the
+  // backend isn't configured, or if the catalog tables are still empty).
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    async function load() {
+      if (!supabase) {
+        setCatalog(FALLBACK_CATALOG);
+        setPacksInfo(FALLBACK_PACKS_INFO);
+        return;
+      }
+      const [{ data: packRows }, { data: elementRows }] = await Promise.all([
+        supabase.from('packs').select('*'),
+        supabase.from('elements').select('*'),
+      ]);
+      if (!packRows?.length) {
+        setCatalog(FALLBACK_CATALOG);
+        setPacksInfo(FALLBACK_PACKS_INFO);
+        return;
+      }
+      const built = buildCatalog(packRows, elementRows || []);
+      setCatalog(built.catalog);
+      setPacksInfo(built.packsInfo);
+    }
+    load();
+  }, []);
+
+  // Load auth + ownership state, then load-or-create the user's scrapbook
+  // pages and restore whatever was placed last time.
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
     if (!supabase) return;
@@ -68,31 +106,123 @@ export default function Editor() {
         .is('redeemed_at', null)
         .gt('expires_at', new Date().toISOString());
       setCreditCount(count || 0);
+
+      let { data: books } = await supabase.from('scrapbooks').select('id').eq('user_id', u.id).limit(1);
+      let sbId = books?.[0]?.id;
+      if (!sbId) {
+        const { data: newBook } = await supabase.from('scrapbooks').insert({ user_id: u.id }).select('id').single();
+        sbId = newBook?.id;
+      }
+      setScrapbookId(sbId);
+
+      let { data: pageRows } = await supabase.from('scrapbook_pages').select('id, page_number').eq('scrapbook_id', sbId).order('page_number', { ascending: true });
+      if (!pageRows?.length) {
+        const { data: newPage } = await supabase.from('scrapbook_pages').insert({ scrapbook_id: sbId, page_number: 1 }).select('id, page_number').single();
+        pageRows = [newPage];
+      }
+      setPages(pageRows);
+      const firstPage = pageRows[0];
+      setPageId(firstPage.id);
+
+      const { data: placed } = await supabase.from('scrapbook_elements').select('*').eq('page_id', firstPage.id);
+      if (placed?.length) {
+        const restored = placed.map((row) => {
+          counterRef.current = Math.max(counterRef.current, row.layer_order);
+          return { uid: row.id, itemId: row.element_id, x: row.x, y: row.y, w: row.w, h: row.h, z: row.layer_order };
+        });
+        setElements(restored);
+      }
+      loadedRef.current = true;
+
+      if (typeof window !== 'undefined' && window.location.search.includes('purchase=success')) {
+        showToast('Purchase complete!');
+        setTimeout(async () => {
+          const { data: owned2 } = await supabase.from('user_owned_packs').select('pack_id').eq('user_id', u.id);
+          setOwnedPacks(new Set((owned2 || []).map((r) => r.pack_id)));
+          const { count: count2 } = await supabase
+            .from('credits')
+            .select('*', { count: 'exact', head: true })
+            .eq('user_id', u.id)
+            .is('redeemed_at', null)
+            .gt('expires_at', new Date().toISOString());
+          setCreditCount(count2 || 0);
+        }, 1500);
+      }
     });
   }, []);
+
+  // Autosave.
+  useEffect(() => {
+    if (!loadedRef.current || !pageId) return;
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    setSaveState('saving');
+    const timer = setTimeout(async () => {
+      await supabase.from('scrapbook_elements').delete().eq('page_id', pageId);
+      if (elements.length) {
+        await supabase.from('scrapbook_elements').insert(
+          elements.map((el) => ({ page_id: pageId, element_id: el.itemId, x: el.x, y: el.y, w: el.w, h: el.h, layer_order: el.z }))
+        );
+      }
+      setSaveState('saved');
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [elements, pageId]);
 
   function showToast(msg) {
     setToast(msg);
     setTimeout(() => setToast(''), 2600);
   }
 
+  async function switchPage(pid) {
+    if (pid === pageId) return;
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    loadedRef.current = false;
+    setPageId(pid);
+    setElements([]);
+    const { data: placed } = await supabase.from('scrapbook_elements').select('*').eq('page_id', pid);
+    const restored = (placed || []).map((row) => {
+      counterRef.current = Math.max(counterRef.current, row.layer_order);
+      return { uid: row.id, itemId: row.element_id, x: row.x, y: row.y, w: row.w, h: row.h, z: row.layer_order };
+    });
+    setElements(restored);
+    loadedRef.current = true;
+  }
+
+  async function addPage() {
+    if (pages.length >= 3 && !isSubscriber) {
+      showToast('Free plan is limited to 3 pages — go Pro for unlimited pages.');
+      return;
+    }
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase || !scrapbookId) return;
+    const nextNumber = Math.max(...pages.map((p) => p.page_number)) + 1;
+    const { data: newPage } = await supabase.from('scrapbook_pages').insert({ scrapbook_id: scrapbookId, page_number: nextNumber }).select('id, page_number').single();
+    if (newPage) {
+      setPages((prev) => [...prev, newPage]);
+      switchPage(newPage.id);
+    }
+  }
+
   function isOwned(packId) {
-    return PACKS[packId]?.free || ownedPacks.has(packId);
+    return packsInfo[packId]?.free || ownedPacks.has(packId);
   }
 
   function placeElement(itemId, x, y) {
-    const packId = findItemPack(itemId);
+    const packId = findItemPack(catalog, itemId);
+    if (!packId) return;
     counterRef.current += 1;
-    const isFont = CATALOG.fonts.some((p) => p.items.some((i) => i.id === itemId));
-    setElements((prev) => [
-      ...prev,
-      { uid: 'el' + counterRef.current, itemId, packId, x, y, w: isFont ? 140 : 64, h: isFont ? 40 : 64, z: counterRef.current, isFont },
-    ]);
+    const isFont = isFontItem(catalog, itemId);
+    setElements((prev) => [...prev, { uid: 'el' + counterRef.current, itemId, x, y, w: isFont ? 140 : 64, h: isFont ? 40 : 64, z: counterRef.current }]);
   }
 
   function unownedPacksInUse() {
     const ids = new Set();
-    elements.forEach((el) => { if (!isOwned(el.packId)) ids.add(el.packId); });
+    elements.forEach((el) => {
+      const packId = findItemPack(catalog, el.itemId);
+      if (packId && !isOwned(packId)) ids.add(packId);
+    });
     return [...ids];
   }
 
@@ -118,17 +248,18 @@ export default function Editor() {
     });
     const data = await res.json();
     if (data.url) {
-      window.location.href = data.url; // Stripe Checkout — ownership is granted by the webhook after payment.
+      window.location.href = data.url;
     } else {
       showToast(data.error || 'Checkout is not available yet.');
     }
   }
 
   const unowned = unownedPacksInUse();
+  const fontFamilies = [...new Set(catalog.fonts.flatMap((p) => p.items).map((i) => i.fontFamily).filter(Boolean))];
 
   return (
     <div style={styles.app}>
-      <style>{fontImport}</style>
+      <style>{fontImport(fontFamilies)}</style>
       <aside style={styles.sidebar}>
         <div style={styles.sidebarHeader}>Supply shelf</div>
         <div style={styles.tabs}>
@@ -140,26 +271,31 @@ export default function Editor() {
           ))}
         </div>
         <div style={styles.packs}>
-          {CATALOG[activeCat].map((pack) => {
+          {catalog[activeCat].map((pack) => {
             const owned = isOwned(pack.id);
-            const info = PACKS[pack.id];
+            const info = packsInfo[pack.id];
+            if (!pack.items.length) return null;
             return (
               <div key={pack.id} style={styles.pack}>
                 <div style={styles.packHead}>
                   <span style={styles.packTitle}>
                     {!owned && <Seal />} {info?.name}
+                    {pack.subcategory && <span style={styles.subcatTag}>{pack.subcategory}</span>}
                   </span>
-                  <span style={styles.packPrice}>{info?.free ? 'free' : `$${(info.priceCents / 100).toFixed(2)}`}</span>
+                  <span style={styles.packPrice}>{info?.free ? 'free' : `$${((info?.priceCents || 0) / 100).toFixed(2)}`}</span>
                 </div>
                 <div style={styles.packBody}>
                   {pack.items.map((it) =>
                     activeCat === 'fonts' ? (
                       <div key={it.id} draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', it.id)}
-                        style={{ ...styles.swatch, ...styles.fontSwatch, opacity: owned ? 1 : 0.55 }}>{it.label}</div>
+                        style={{ ...styles.swatch, fontFamily: it.fontFamily || 'Caveat, cursive', fontSize: 18, opacity: owned ? 1 : 0.55 }}>{it.label}</div>
                     ) : (
                       <div key={it.id} draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', it.id)}
-                        style={{ ...styles.swatch, opacity: owned ? 1 : 0.55 }}
-                        dangerouslySetInnerHTML={{ __html: it.icon }} />
+                        style={{ ...styles.swatch, opacity: owned ? 1 : 0.55, padding: it.assetUrl ? 0 : undefined, overflow: 'hidden' }}>
+                        {it.assetUrl
+                          ? <img src={it.assetUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                          : <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: it.icon || '' }} />}
+                      </div>
                     )
                   )}
                 </div>
@@ -171,8 +307,21 @@ export default function Editor() {
 
       <main style={styles.main}>
         <div style={styles.topbar}>
-          <div style={{ color: '#EDE6D2', fontSize: 13 }}>
-            {user ? `Signed in as ${user.email}` : <a href="/login" style={{ color: '#EDE6D2' }}>Sign in to save your work</a>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {pages.map((p) => (
+                <button key={p.id} onClick={() => switchPage(p.id)}
+                  style={{ ...styles.pageTab, ...(p.id === pageId ? styles.pageTabActive : {}) }}>
+                  Page {p.page_number}
+                </button>
+              ))}
+              <button onClick={addPage} style={styles.addPageBtn}>+</button>
+            </div>
+            <div style={{ color: '#EDE6D2', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+              {user ? `Signed in as ${user.email}` : <a href="/login" style={{ color: '#EDE6D2' }}>Sign in to save your work</a>}
+              {user && saveState === 'saving' && <span style={{ opacity: 0.6 }}>Saving…</span>}
+              {user && saveState === 'saved' && <span style={{ opacity: 0.6 }}>Saved</span>}
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {unowned.length > 0 && (
@@ -197,14 +346,19 @@ export default function Editor() {
             }}
           >
             {elements.length === 0 && <div style={styles.emptyHint}>Drag something onto the page to get started</div>}
-            {elements.map((el) => (
-              <PlacedElement key={el.uid} el={el} owned={isOwned(el.packId)}
-                onMove={(x, y) => setElements((prev) => prev.map((p) => (p.uid === el.uid ? { ...p, x, y } : p)))}
-                onResize={(w, h) => setElements((prev) => prev.map((p) => (p.uid === el.uid ? { ...p, w, h } : p)))}
-                onDelete={() => setElements((prev) => prev.filter((p) => p.uid !== el.uid))}
-                onFront={() => { counterRef.current += 1; const z = counterRef.current; setElements((prev) => prev.map((p) => (p.uid === el.uid ? { ...p, z } : p))); }}
-              />
-            ))}
+            {elements.map((el) => {
+              const item = findItem(catalog, el.itemId);
+              const packId = findItemPack(catalog, el.itemId);
+              if (!item) return null;
+              return (
+                <PlacedElement key={el.uid} el={el} item={item} owned={isOwned(packId)}
+                  onMove={(x, y) => setElements((prev) => prev.map((p) => (p.uid === el.uid ? { ...p, x, y } : p)))}
+                  onResize={(w, h) => setElements((prev) => prev.map((p) => (p.uid === el.uid ? { ...p, w, h } : p)))}
+                  onDelete={() => setElements((prev) => prev.filter((p) => p.uid !== el.uid))}
+                  onFront={() => { counterRef.current += 1; const z = counterRef.current; setElements((prev) => prev.map((p) => (p.uid === el.uid ? { ...p, z } : p))); }}
+                />
+              );
+            })}
           </div>
         </div>
       </main>
@@ -212,6 +366,7 @@ export default function Editor() {
       {cartOpen && (
         <CartModal
           unowned={unowned}
+          packsInfo={packsInfo}
           creditCount={creditCount}
           isSubscriber={isSubscriber}
           onCancel={() => setCartOpen(false)}
@@ -232,8 +387,8 @@ function Seal() {
   );
 }
 
-function PlacedElement({ el, owned, onMove, onResize, onDelete, onFront }) {
-  const item = Object.values(CATALOG).flat().flatMap((p) => p.items).find((i) => i.id === el.itemId);
+function PlacedElement({ el, item, owned, onMove, onResize, onDelete, onFront }) {
+  const isFont = item.label !== undefined;
   return (
     <div
       style={{ position: 'absolute', left: el.x, top: el.y, width: el.w, height: el.h, zIndex: el.z, cursor: 'move' }}
@@ -250,10 +405,12 @@ function PlacedElement({ el, owned, onMove, onResize, onDelete, onFront }) {
           <svg viewBox="0 0 24 24" style={{ width: 9, height: 9, fill: '#fff' }}><path d="M6 10V7a6 6 0 1112 0v3h1a1 1 0 011 1v9a1 1 0 01-1 1H5a1 1 0 01-1-1v-9a1 1 0 011-1zm2 0h8V7a4 4 0 00-8 0z" /></svg>
         </span>
       )}
-      {el.isFont ? (
-        <div style={{ fontFamily: 'Caveat, cursive', fontSize: 26, whiteSpace: 'nowrap', color: '#2E2A22' }}>{item?.label}</div>
+      {isFont ? (
+        <div style={{ fontFamily: item.fontFamily || 'Caveat, cursive', fontSize: 26, whiteSpace: 'nowrap', color: '#2E2A22' }}>{item.label}</div>
+      ) : item.assetUrl ? (
+        <img src={item.assetUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }} />
       ) : (
-        <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: item?.icon || '' }} />
+        <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: item.icon || '' }} />
       )}
       <span onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ position: 'absolute', top: -9, left: -9, width: 18, height: 18, borderRadius: '50%', background: '#8B7355', color: '#fff', border: '2px solid #fff', fontSize: 11, lineHeight: '14px', textAlign: 'center', cursor: 'pointer', fontWeight: 700 }}>x</span>
       <span
@@ -270,11 +427,11 @@ function PlacedElement({ el, owned, onMove, onResize, onDelete, onFront }) {
   );
 }
 
-function CartModal({ unowned, creditCount, isSubscriber, onCancel, onBuy }) {
+function CartModal({ unowned, packsInfo, creditCount, isSubscriber, onCancel, onBuy }) {
   const [useCredit, setUseCredit] = useState(creditCount > 0);
   let total = 0;
   const rows = unowned.map((id, i) => {
-    const pack = PACKS[id];
+    const pack = packsInfo[id] || { name: id, priceCents: 0 };
     const applyCredit = useCredit && i === 0 && creditCount > 0;
     const price = applyCredit ? 0 : isSubscriber ? pack.priceCents * 0.5 : pack.priceCents;
     total += price;
@@ -310,7 +467,10 @@ function CartModal({ unowned, creditCount, isSubscriber, onCancel, onBuy }) {
   );
 }
 
-const fontImport = `@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Inter:wght@400;500;600&display=swap');`;
+function fontImport(extraFamilies) {
+  const families = ['Caveat:wght@500;700', 'Inter:wght@400;500;600', ...extraFamilies.map((f) => f.replace(/ /g, '+'))];
+  return `@import url('https://fonts.googleapis.com/css2?${families.map((f) => `family=${f}`).join('&')}&display=swap');`;
+}
 
 const styles = {
   app: { display: 'flex', height: '100vh', fontFamily: 'Inter, sans-serif', background: '#3E4A3D' },
@@ -323,12 +483,15 @@ const styles = {
   pack: { background: 'rgba(255,255,255,0.35)', border: '1px solid #9C7E4E', borderRadius: 10, marginBottom: 12, overflow: 'hidden' },
   packHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px' },
   packTitle: { fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 },
+  subcatTag: { fontSize: 10, fontWeight: 500, color: '#7C9070', fontStyle: 'italic' },
   packPrice: { fontSize: 11, color: '#8A3B21', fontWeight: 600 },
   packBody: { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, padding: '0 10px 10px' },
   swatch: { aspectRatio: '1', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', background: '#fff' },
-  fontSwatch: { fontFamily: 'Caveat, cursive', fontSize: 20 },
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
   topbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px', background: '#465243' },
+  pageTab: { padding: '6px 14px', borderRadius: '6px 6px 0 0', background: 'rgba(255,255,255,0.08)', color: '#EDE6D2', fontSize: 13, fontWeight: 500, cursor: 'pointer', border: 'none' },
+  pageTabActive: { background: '#F5EFE0', color: '#2E2A22' },
+  addPageBtn: { width: 26, height: 26, borderRadius: '50%', background: 'rgba(255,255,255,0.1)', color: '#EDE6D2', border: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1 },
   cartDot: { background: '#B8502E', color: '#fff', fontSize: 11, fontWeight: 700, borderRadius: '50%', width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' },
   btnPrimary: { fontFamily: 'Inter, sans-serif', fontSize: 13, fontWeight: 600, padding: '9px 16px', borderRadius: 8, border: 'none', cursor: 'pointer', background: '#B8502E', color: '#fff' },
   btnGhostLight: { fontFamily: 'Inter, sans-serif', fontSize: 13, fontWeight: 600, padding: '9px 16px', borderRadius: 8, border: '1px solid #9C7E4E', cursor: 'pointer', background: 'transparent' },
